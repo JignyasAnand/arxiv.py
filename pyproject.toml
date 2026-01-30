@@ -30,6 +30,7 @@ classifiers = [
 requires-python = ">=3.9"
 dependencies = [
     "feedparser~=6.0.10",
+    "httpx~=0.28.1",
     "requests~=2.32.0",
     "typing_extensions>=4.0.0; python_version < '3.11'",
 ]
@@ -40,9 +41,11 @@ dev = [
     "ruff>=0.1.2",
     "pdoc==14.5.1",
     "pip-audit>=1.1.2",
+    "pytest-asyncio>=1.2.0",
 ]
 test = [
     "pytest>=6.2.2",
+    "pytest-asyncio>=1.2.0",
 ]
 
 [project.urls]
@@ -58,14 +61,16 @@ managed = true
 [dependency-groups]
 dev = [
     "pytest>=6.2.2",
-    "ruff>=0.1.2", 
+    "ruff>=0.1.2",
     "pdoc==14.5.1",
     "pip-audit>=1.1.2",
     "mypy>=1.0.0",
     "types-requests",
+    "pytest-asyncio>=1.2.0",
 ]
 test = [
     "pytest>=6.2.2",
+    "pytest-asyncio>=1.2.0",
 ]
 
 # Modern build configuration with hatch-vcs
