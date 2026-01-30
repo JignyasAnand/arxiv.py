@@ -1,19 +1,14 @@
-""".. include:: ../README.md"""
-
 from __future__ import annotations
 
 import logging
-import time
-import itertools
+import asyncio
 import feedparser
-import requests
+import httpx
 
 from urllib.parse import urlencode
 from datetime import datetime, timedelta
-from typing import Generator, Iterator
+from typing import AsyncGenerator
 
-# These symbols were moved to `schema`, but are re-exported here to
-# preserve backward compatibility with existing imports.
 from .schema import (
     Result,
     Search,
@@ -33,18 +28,18 @@ __all__ = [
     "ArxivError",
     "UnexpectedEmptyPageError",
     "HTTPError",
-    "Client",
+    "AsyncClient",
 ]
 
 logger = logging.getLogger(__name__)
 
 
-class Client:
+class AsyncClient:
     """
-    Specifies a strategy for fetching results from arXiv's API.
+    Specifies a strategy for fetching results from arXiv's API asynchronously.
 
     This class obscures pagination and retry logic, and exposes
-    `Client.results`.
+    `AsyncClient.results`.
     """
 
     query_url_format = "https://export.arxiv.org/api/query?{}"
@@ -71,7 +66,8 @@ class Client:
     """
 
     _last_request_dt: datetime | None
-    _session: requests.Session
+    _client: httpx.AsyncClient
+    _lock: asyncio.Lock
 
     def __init__(self, page_size: int = 100, delay_seconds: float = 3.0, num_retries: int = 3):
         """
@@ -86,10 +82,11 @@ class Client:
         self.delay_seconds = delay_seconds
         self.num_retries = num_retries
         self._last_request_dt = None
-        self._session = requests.Session()
+        self._client = httpx.AsyncClient()
+        self._lock = asyncio.Lock()
 
     def __str__(self) -> str:
-        return f"Client(page_size={self.page_size}, delay={self.delay_seconds}s, retries={self.num_retries})"
+        return f"AsyncClient(page_size={self.page_size}, delay={self.delay_seconds}s, retries={self.num_retries})"
 
     def __repr__(self) -> str:
         return "{}(page_size={}, delay_seconds={}, num_retries={})".format(
@@ -99,7 +96,7 @@ class Client:
             repr(self.num_retries),
         )
 
-    def results(self, search: Search, offset: int = 0) -> Iterator[Result]:
+    async def results(self, search: Search, offset: int = 0) -> AsyncGenerator[Result, None]:
         """
         Uses this client configuration to fetch one page of the search results
         at a time, yielding the parsed `Result`s, until `max_results` results
@@ -110,18 +107,21 @@ class Client:
         Setting a nonzero `offset` discards leading records in the result set.
         When `offset` is greater than or equal to `search.max_results`, the full
         result set is discarded.
-
-        For more on using generators, see
-        [Generators](https://wiki.python.org/moin/Generators).
         """
         limit = search.max_results - offset if search.max_results else None
         if limit and limit < 0:
-            return iter(())
-        return itertools.islice(self._results(search, offset), limit)
+            return
 
-    def _results(self, search: Search, offset: int = 0) -> Generator[Result, None, None]:
+        async for result in self._results(search, offset):
+            if limit is not None:
+                limit -= 1
+                if limit < 0:
+                    break
+            yield result
+
+    async def _results(self, search: Search, offset: int = 0) -> AsyncGenerator[Result, None]:
         page_url = self._format_url(search, offset, self.page_size)
-        feed = self._parse_feed(page_url, first_page=True)
+        feed = await self._parse_feed(page_url, first_page=True)
         if not feed.entries:
             logger.info("Got empty first page; stopping generation")
             return
@@ -142,7 +142,7 @@ class Client:
             if offset >= total_results:
                 break
             page_url = self._format_url(search, offset, self.page_size)
-            feed = self._parse_feed(page_url, first_page=False)
+            feed = await self._parse_feed(page_url, first_page=False)
 
     def _format_url(self, search: Search, start: int, page_size: int) -> str:
         """
@@ -158,7 +158,7 @@ class Client:
         )
         return self.query_url_format.format(urlencode(url_args))
 
-    def _parse_feed(
+    async def _parse_feed(
         self, url: str, first_page: bool = True, _try_index: int = 0
     ) -> feedparser.FeedParserDict:
         """
@@ -168,19 +168,19 @@ class Client:
         `self.num_retries` times.
         """
         try:
-            return self.__try_parse_feed(url, first_page=first_page, try_index=_try_index)
+            return await self.__try_parse_feed(url, first_page=first_page, try_index=_try_index)
         except (
             HTTPError,
             UnexpectedEmptyPageError,
-            requests.exceptions.ConnectionError,
+            httpx.RequestError,
         ) as err:
             if _try_index < self.num_retries:
                 logger.debug("Got error (try %d): %s", _try_index, err)
-                return self._parse_feed(url, first_page=first_page, _try_index=_try_index + 1)
+                return await self._parse_feed(url, first_page=first_page, _try_index=_try_index + 1)
             logger.debug("Giving up (try %d): %s", _try_index, err)
             raise err
 
-    def __try_parse_feed(
+    async def __try_parse_feed(
         self,
         url: str,
         first_page: bool,
@@ -192,19 +192,21 @@ class Client:
         sleeps until delay_seconds seconds have passed.
         """
         # If this call would violate the rate limit, sleep until it doesn't.
-        if self._last_request_dt is not None:
-            required = timedelta(seconds=self.delay_seconds)
-            since_last_request = datetime.now() - self._last_request_dt
-            if since_last_request < required:
-                to_sleep = (required - since_last_request).total_seconds()
-                logger.info("Sleeping: %f seconds", to_sleep)
-                time.sleep(to_sleep)
+        async with self._lock:
+            if self._last_request_dt is not None:
+                required = timedelta(seconds=self.delay_seconds)
+                since_last_request = datetime.now() - self._last_request_dt
+                if since_last_request < required:
+                    to_sleep = (required - since_last_request).total_seconds()
+                    logger.info("Sleeping: %f seconds", to_sleep)
+                    await asyncio.sleep(to_sleep)
 
-        logger.info("Requesting page (first: %r, try: %d): %s", first_page, try_index, url)
+            logger.info("Requesting page (first: %r, try: %d): %s", first_page, try_index, url)
 
-        resp = self._session.get(url, headers={"user-agent": "arxiv.py/2.3.2"})
-        self._last_request_dt = datetime.now()
-        if resp.status_code != requests.codes.OK:
+            resp = await self._client.get(url, headers={"user-agent": "arxiv.py/2.3.2"})
+            self._last_request_dt = datetime.now()
+
+        if resp.status_code != httpx.codes.OK:
             raise HTTPError(url, try_index, resp.status_code)
 
         feed = feedparser.parse(resp.content)
@@ -218,3 +220,12 @@ class Client:
             )
 
         return feed
+
+    async def close(self):
+        await self._client.aclose()
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.close()
