@@ -35,6 +35,7 @@ if TYPE_CHECKING:
         arxiv_doi: str
         arxiv_primary_category: dict[str, str]
 
+
 _DEFAULT_TIME = datetime.min
 
 
@@ -550,7 +551,7 @@ class Search:
         **Deprecated** after 2.0.0; use `Client.results`.
         """
         from . import Client
-        
+
         warnings.warn(
             "The 'Search.results' method is deprecated, use 'Client.results' instead",
             DeprecationWarning,

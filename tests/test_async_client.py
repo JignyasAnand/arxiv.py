@@ -7,8 +7,10 @@ from datetime import datetime, timedelta
 from pytest import approx
 import httpx
 
+
 def empty_response(code: int) -> httpx.Response:
     return httpx.Response(status_code=code, content=b"")
+
 
 class TestAsyncClient(unittest.IsolatedAsyncioTestCase):
     async def test_invalid_format_id(self):
@@ -46,7 +48,7 @@ class TestAsyncClient(unittest.IsolatedAsyncioTestCase):
     async def test_query_page_count(self):
         client = AsyncClient(page_size=10)
         client._parse_feed = MagicMock(wraps=client._parse_feed)
-        
+
         # We need to await the generator
         results = []
         async for r in client.results(arxiv.Search(query="testing", max_results=55)):
@@ -79,31 +81,31 @@ class TestAsyncClient(unittest.IsolatedAsyncioTestCase):
         default = []
         async for r in client.results(search):
             default.append(r)
-            
+
         no_offset = []
         async for r in client.results(search):
             no_offset.append(r)
-            
+
         self.assertListEqual(default, no_offset)
 
         offset = max_results // 2
         half_offset = []
         async for r in client.results(search, offset=offset):
             half_offset.append(r)
-            
+
         self.assertListEqual(default[offset:], half_offset)
 
         offset_above_max_results = []
         async for r in client.results(search, offset=max_results):
             offset_above_max_results.append(r)
-            
+
         self.assertListEqual(offset_above_max_results, [])
 
     async def test_search_results_offset(self):
         # NOTE: page size is irrelevant here.
         client = AsyncClient(page_size=15)
         search = arxiv.Search(query="testing", max_results=10)
-        
+
         all_results = []
         async for r in client.results(search, offset=0):
             all_results.append(r)
@@ -230,15 +232,14 @@ class TestAsyncClient(unittest.IsolatedAsyncioTestCase):
         url = client._format_url(arxiv.Search(query="concurrent"), 0, 1)
 
         # Run two requests concurrently
-        await asyncio.gather(
-            client._parse_feed(url),
-            client._parse_feed(url)
-        )
+        await asyncio.gather(client._parse_feed(url), client._parse_feed(url))
 
         # The first request should proceed immediately (no sleep).
         # The second request must wait for the lock, see the updated _last_request_dt,
         # and sleep for the remainder of the delay_seconds.
         self.assertTrue(mock_sleep.called, "Should have slept for the second concurrent request")
-        self.assertEqual(mock_sleep.call_count, 1, "Should have successfully locked and slept exactly once")
-        
+        self.assertEqual(
+            mock_sleep.call_count, 1, "Should have successfully locked and slept exactly once"
+        )
+
         mock_sleep.assert_called_with(approx(1.0, rel=0.1))

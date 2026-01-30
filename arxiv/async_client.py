@@ -20,6 +20,17 @@ from .schema import (
     _classname,
 )
 
+__all__ = [
+    "Result",
+    "Search",
+    "SortCriterion",
+    "SortOrder",
+    "ArxivError",
+    "UnexpectedEmptyPageError",
+    "HTTPError",
+    "AsyncClient",
+]
+
 logger = logging.getLogger(__name__)
 
 
@@ -209,10 +220,10 @@ class AsyncClient:
             )
 
         return feed
-    
+
     async def close(self):
         await self._client.aclose()
-    
+
     async def __aenter__(self):
         return self
 

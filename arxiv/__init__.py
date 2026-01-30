@@ -25,6 +25,17 @@ from .schema import (
     _classname,
 )
 
+__all__ = [
+    "Result",
+    "Search",
+    "SortCriterion",
+    "SortOrder",
+    "ArxivError",
+    "UnexpectedEmptyPageError",
+    "HTTPError",
+    "Client",
+]
+
 logger = logging.getLogger(__name__)
 
 
