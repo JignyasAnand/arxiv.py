@@ -565,12 +565,9 @@ class Search:
         return Client().results(self, offset=offset)
 
 
-class Client:
+class BaseClient:
     """
-    Specifies a strategy for fetching results from arXiv's API.
-
-    This class obscures pagination and retry logic, and exposes
-    `Client.results`.
+    Base class for arXiv API clients.
     """
 
     query_url_format = "https://export.arxiv.org/api/query?{}"
@@ -597,7 +594,6 @@ class Client:
     """
 
     _last_request_dt: datetime | None
-    _session: requests.Session
 
     def __init__(self, page_size: int = 100, delay_seconds: float = 3.0, num_retries: int = 3):
         """
@@ -612,10 +608,9 @@ class Client:
         self.delay_seconds = delay_seconds
         self.num_retries = num_retries
         self._last_request_dt = None
-        self._session = requests.Session()
 
     def __str__(self) -> str:
-        return f"Client(page_size={self.page_size}, delay={self.delay_seconds}s, retries={self.num_retries})"
+        return f"{_classname(self)}(page_size={self.page_size}, delay={self.delay_seconds}s, retries={self.num_retries})"
 
     def __repr__(self) -> str:
         return "{}(page_size={}, delay_seconds={}, num_retries={})".format(
@@ -624,6 +619,44 @@ class Client:
             repr(self.delay_seconds),
             repr(self.num_retries),
         )
+
+    def _format_url(self, search: Search, start: int, page_size: int) -> str:
+        """
+        Construct a request API for search that returns up to `page_size`
+        results starting with the result at index `start`.
+        """
+        url_args = search._url_args()
+        url_args.update(
+            {
+                "start": str(start),
+                "max_results": str(page_size),
+            }
+        )
+        return self.query_url_format.format(urlencode(url_args))
+
+
+class Client(BaseClient):
+    """
+    Specifies a strategy for fetching results from arXiv's API.
+
+    This class obscures pagination and retry logic, and exposes
+    `Client.results`.
+    """
+
+    _session: requests.Session
+    _session: requests.Session
+
+    def __init__(self, page_size: int = 100, delay_seconds: float = 3.0, num_retries: int = 3):
+        """
+        Constructs an arXiv API client with the specified options.
+
+        Note: the default parameters should provide a robust request strategy
+        for most use cases. Extreme page sizes, delays, or retries risk
+        violating the arXiv [API Terms of Use](https://arxiv.org/help/api/tou),
+        brittle behavior, and inconsistent results.
+        """
+        super().__init__(page_size, delay_seconds, num_retries)
+        self._session = requests.Session()
 
     def results(self, search: Search, offset: int = 0) -> Iterator[Result]:
         """
@@ -669,20 +702,6 @@ class Client:
                 break
             page_url = self._format_url(search, offset, self.page_size)
             feed = self._parse_feed(page_url, first_page=False)
-
-    def _format_url(self, search: Search, start: int, page_size: int) -> str:
-        """
-        Construct a request API for search that returns up to `page_size`
-        results starting with the result at index `start`.
-        """
-        url_args = search._url_args()
-        url_args.update(
-            {
-                "start": str(start),
-                "max_results": str(page_size),
-            }
-        )
-        return self.query_url_format.format(urlencode(url_args))
 
     def _parse_feed(
         self, url: str, first_page: bool = True, _try_index: int = 0
@@ -746,7 +765,7 @@ class Client:
         return feed
 
 
-class AsyncClient:
+class AsyncClient(BaseClient):
     """
     Specifies a strategy for fetching results from arXiv's API asynchronously.
 
@@ -754,30 +773,6 @@ class AsyncClient:
     `AsyncClient.results`.
     """
 
-    query_url_format = "https://export.arxiv.org/api/query?{}"
-    """
-    The arXiv query API endpoint format.
-    """
-    page_size: int
-    """
-    Maximum number of results fetched in a single API request. Smaller pages can
-    be retrieved faster, but may require more round-trips.
-
-    The API's limit is 2000 results per page.
-    """
-    delay_seconds: float
-    """
-    Number of seconds to wait between API requests.
-
-    [arXiv's Terms of Use](https://arxiv.org/help/api/tou) ask that you "make no
-    more than one request every three seconds."
-    """
-    num_retries: int
-    """
-    Number of times to retry a failing API request before raising an Exception.
-    """
-
-    _last_request_dt: datetime | None
     _client: httpx.AsyncClient
     _lock: asyncio.Lock
 
@@ -790,23 +785,9 @@ class AsyncClient:
         violating the arXiv [API Terms of Use](https://arxiv.org/help/api/tou),
         brittle behavior, and inconsistent results.
         """
-        self.page_size = page_size
-        self.delay_seconds = delay_seconds
-        self.num_retries = num_retries
-        self._last_request_dt = None
+        super().__init__(page_size, delay_seconds, num_retries)
         self._client = httpx.AsyncClient()
         self._lock = asyncio.Lock()
-
-    def __str__(self) -> str:
-        return f"AsyncClient(page_size={self.page_size}, delay={self.delay_seconds}s, retries={self.num_retries})"
-
-    def __repr__(self) -> str:
-        return "{}(page_size={}, delay_seconds={}, num_retries={})".format(
-            _classname(self),
-            repr(self.page_size),
-            repr(self.delay_seconds),
-            repr(self.num_retries),
-        )
 
     async def results(self, search: Search, offset: int = 0) -> AsyncGenerator[Result, None]:
         """
@@ -855,20 +836,6 @@ class AsyncClient:
                 break
             page_url = self._format_url(search, offset, self.page_size)
             feed = await self._parse_feed(page_url, first_page=False)
-
-    def _format_url(self, search: Search, start: int, page_size: int) -> str:
-        """
-        Construct a request API for search that returns up to `page_size`
-        results starting with the result at index `start`.
-        """
-        url_args = search._url_args()
-        url_args.update(
-            {
-                "start": str(start),
-                "max_results": str(page_size),
-            }
-        )
-        return self.query_url_format.format(urlencode(url_args))
 
     async def _parse_feed(
         self, url: str, first_page: bool = True, _try_index: int = 0
